@@ -1,6 +1,7 @@
 use crate::{
     contains::Contains,
     inline_spl_token_v2_0::{self, SPL_TOKEN_ACCOUNT_MINT_OFFSET, SPL_TOKEN_ACCOUNT_OWNER_OFFSET},
+    inline_velas_account,
     secondary_index::*,
 };
 use dashmap::DashSet;
@@ -63,6 +64,62 @@ pub enum IndexKey {
     ProgramId(Pubkey),
     SplTokenMint(Pubkey),
     SplTokenOwner(Pubkey),
+    VelasAccountOwner(Pubkey),
+    VelasAccountOperational(Pubkey),
+    VelasOwnerStorage(Pubkey),
+    VelasOperationStorage(Pubkey),
+}
+
+impl IndexKey {
+    fn to_account_index(&self) -> (AccountIndex, &Pubkey) {
+        match self {
+            Self::ProgramId(key) => (AccountIndex::ProgramId, key),
+            Self::SplTokenMint(key) => (AccountIndex::SplTokenMint, key),
+            Self::SplTokenOwner(key) => (AccountIndex::SplTokenOwner, key),
+            Self::VelasAccountOwner(key) => (AccountIndex::VelasAccountOwner, key),
+            Self::VelasAccountOperational(key) => (AccountIndex::VelasAccountOperational, key),
+            Self::VelasOwnerStorage(key) => (AccountIndex::VelasOwnerStorage, key),
+            Self::VelasOperationStorage(key) => (AccountIndex::VelasOperationStorage, key),
+        }
+    }
+}
+
+/// Use match instead of contains, to simplify future indexes adding.
+macro_rules! with_account_index {
+    ($indexes:expr, $index: expr, |$name: ident| $operation: block) => {{
+        use AccountIndex::*;
+        match $index {
+            ProgramId => {
+                let $name = &$indexes.program_id_index;
+                $operation
+            }
+            SplTokenOwner => {
+                let $name = &$indexes.spl_token_owner_index;
+                $operation
+            }
+            SplTokenMint => {
+                let $name = &$indexes.spl_token_mint_index;
+                $operation
+            }
+
+            VelasAccountOwner => {
+                let $name = &$indexes.velas_account_by_owner_index;
+                $operation
+            }
+            VelasAccountOperational => {
+                let $name = &$indexes.velas_account_by_operational_index;
+                $operation
+            }
+            VelasOwnerStorage => {
+                let $name = &$indexes.velas_owners_index;
+                $operation
+            }
+            VelasOperationStorage => {
+                let $name = &$indexes.velas_operationals_index;
+                $operation
+            }
+        };
+    }};
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -70,6 +127,82 @@ pub enum AccountIndex {
     ProgramId,
     SplTokenMint,
     SplTokenOwner,
+    VelasAccountOwner,
+    VelasAccountOperational,
+    VelasOwnerStorage,
+    VelasOperationStorage,
+}
+
+impl AccountIndex {
+    pub fn get_account_indexes(
+        account_owner: &Pubkey,
+        account_data: &[u8],
+    ) -> Vec<(AccountIndex, Pubkey)> {
+        let mut indexes = Vec::new();
+        indexes.push((AccountIndex::ProgramId, *account_owner));
+
+        // Spl token
+        if *account_owner == inline_spl_token_v2_0::id()
+            && account_data.len() == inline_spl_token_v2_0::state::Account::get_packed_len()
+        {
+            indexes.push((
+                AccountIndex::SplTokenOwner,
+                Pubkey::new(
+                    &account_data[SPL_TOKEN_ACCOUNT_OWNER_OFFSET
+                        ..SPL_TOKEN_ACCOUNT_OWNER_OFFSET + PUBKEY_BYTES],
+                ),
+            ));
+
+            indexes.push((
+                AccountIndex::SplTokenMint,
+                Pubkey::new(
+                    &account_data[SPL_TOKEN_ACCOUNT_MINT_OFFSET
+                        ..SPL_TOKEN_ACCOUNT_MINT_OFFSET + PUBKEY_BYTES],
+                ),
+            ));
+        }
+
+        // VelasAccount
+        if *account_owner == inline_velas_account::id()
+            && account_data.len() == inline_velas_account::state::Account::get_packed_len()
+        {
+            indexes.extend(
+                inline_velas_account::state::Account::owners_from_data(&account_data)
+                    .into_iter()
+                    .map(|owner| (AccountIndex::VelasAccountOwner, owner)),
+            );
+
+            indexes.extend(
+                inline_velas_account::state::Account::operationals_from_data(&account_data)
+                    .into_iter()
+                    .map(|owner| (AccountIndex::VelasAccountOperational, owner)),
+            );
+        }
+        // VelasAccount::OwnerStorage
+        if *account_owner == inline_velas_account::id()
+            && account_data.len()
+                == inline_velas_account::state::OperationalStorage::get_packed_len()
+        {
+            indexes.extend(
+                inline_velas_account::state::OperationalStorage::operationals_from_data(
+                    &account_data,
+                )
+                .into_iter()
+                .map(|owner| (AccountIndex::VelasOperationStorage, owner)),
+            );
+        }
+        // VelasAccount::OperationStorage
+        if *account_owner == inline_velas_account::id()
+            && account_data.len() == inline_velas_account::state::OwnerStorage::get_packed_len()
+        {
+            indexes.extend(
+                inline_velas_account::state::OwnerStorage::owners_from_data(&account_data)
+                    .into_iter()
+                    .map(|owner| (AccountIndex::VelasOwnerStorage, owner)),
+            );
+        }
+        indexes
+    }
 }
 
 #[derive(Debug)]
@@ -261,10 +394,18 @@ pub struct AccountsIndex<T> {
     pub account_maps: RwLock<AccountMap<Pubkey, AccountMapEntry<T>>>,
     program_id_index: SecondaryIndex<DashMapSecondaryIndexEntry>,
     spl_token_mint_index: SecondaryIndex<DashMapSecondaryIndexEntry>,
+    // Why use RwLock index instead of DashMap??
     spl_token_owner_index: SecondaryIndex<RwLockSecondaryIndexEntry>,
     roots_tracker: RwLock<RootsTracker>,
     ongoing_scan_roots: RwLock<BTreeMap<Slot, u64>>,
     zero_lamport_pubkeys: DashSet<Pubkey>,
+
+    // Velas Account
+    velas_account_by_owner_index: SecondaryIndex<DashMapSecondaryIndexEntry>,
+    velas_account_by_operational_index: SecondaryIndex<DashMapSecondaryIndexEntry>,
+
+    velas_owners_index: SecondaryIndex<DashMapSecondaryIndexEntry>,
+    velas_operationals_index: SecondaryIndex<DashMapSecondaryIndexEntry>,
 }
 
 impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
@@ -423,32 +564,11 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
                 // Pass "" not to log metrics, so RPC doesn't get spammy
                 self.do_scan_accounts(metric_name, ancestors, func, range, Some(max_root));
             }
-            ScanTypes::Indexed(IndexKey::ProgramId(program_id)) => {
-                self.do_scan_secondary_index(
-                    ancestors,
-                    func,
-                    &self.program_id_index,
-                    &program_id,
-                    Some(max_root),
-                );
-            }
-            ScanTypes::Indexed(IndexKey::SplTokenMint(mint_key)) => {
-                self.do_scan_secondary_index(
-                    ancestors,
-                    func,
-                    &self.spl_token_mint_index,
-                    &mint_key,
-                    Some(max_root),
-                );
-            }
-            ScanTypes::Indexed(IndexKey::SplTokenOwner(owner_key)) => {
-                self.do_scan_secondary_index(
-                    ancestors,
-                    func,
-                    &self.spl_token_owner_index,
-                    &owner_key,
-                    Some(max_root),
-                );
+            ScanTypes::Indexed(index) => {
+                let (index, key) = index.to_account_index();
+                with_account_index!(self, index, |index| {
+                    self.do_scan_secondary_index(ancestors, func, &index, &key, Some(max_root))
+                })
             }
         }
 
@@ -820,13 +940,6 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
         account_data: &[u8],
         account_indexes: &HashSet<AccountIndex>,
     ) {
-        if account_indexes.is_empty() {
-            return;
-        }
-
-        if account_indexes.contains(&AccountIndex::ProgramId) {
-            self.program_id_index.insert(account_owner, pubkey, slot);
-        }
         // Note because of the below check below on the account data length, when an
         // account hits zero lamports and is reset to Account::Default, then we skip
         // the below updates to the secondary indexes.
@@ -840,23 +953,16 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
         // 2) When the fetch from storage occurs, it will return Account::Default
         // (as persisted tombstone for snapshots). This will then ultimately be
         // filtered out by post-scan filters, like in `get_filtered_spl_token_accounts_by_owner()`.
-        if *account_owner == inline_spl_token_v2_0::id()
-            && account_data.len() == inline_spl_token_v2_0::state::Account::get_packed_len()
-        {
-            if account_indexes.contains(&AccountIndex::SplTokenOwner) {
-                let owner_key = Pubkey::new(
-                    &account_data[SPL_TOKEN_ACCOUNT_OWNER_OFFSET
-                        ..SPL_TOKEN_ACCOUNT_OWNER_OFFSET + PUBKEY_BYTES],
-                );
-                self.spl_token_owner_index.insert(&owner_key, pubkey, slot);
-            }
 
-            if account_indexes.contains(&AccountIndex::SplTokenMint) {
-                let mint_key = Pubkey::new(
-                    &account_data[SPL_TOKEN_ACCOUNT_MINT_OFFSET
-                        ..SPL_TOKEN_ACCOUNT_MINT_OFFSET + PUBKEY_BYTES],
-                );
-                self.spl_token_mint_index.insert(&mint_key, pubkey, slot);
+        // 1. Precheck owner key, and data size to avoid conflicts
+        // 2. Get key for index
+        // 3. Insert (index_key, pubkey) for specific slot
+        //
+        for (index, index_key) in AccountIndex::get_account_indexes(account_owner, account_data) {
+            if account_indexes.contains(&index) {
+                with_account_index!(self, index, |index| {
+                    index.insert(&index_key, pubkey, slot)
+                })
             }
         }
     }
@@ -951,19 +1057,10 @@ impl<T: 'static + Clone + IsCached + ZeroLamport> AccountsIndex<T> {
     ) where
         C: Contains<'a, Slot>,
     {
-        if account_indexes.contains(&AccountIndex::ProgramId) {
-            self.program_id_index
-                .remove_by_inner_key(inner_key, slots_to_remove);
-        }
-
-        if account_indexes.contains(&AccountIndex::SplTokenOwner) {
-            self.spl_token_owner_index
-                .remove_by_inner_key(inner_key, slots_to_remove);
-        }
-
-        if account_indexes.contains(&AccountIndex::SplTokenMint) {
-            self.spl_token_mint_index
-                .remove_by_inner_key(inner_key, slots_to_remove);
+        for index in account_indexes {
+            with_account_index!(self, index, |idx| {
+                idx.remove_by_inner_key(inner_key, slots_to_remove)
+            })
         }
     }
 

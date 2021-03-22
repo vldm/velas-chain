@@ -46,6 +46,7 @@ use solana_runtime::{
     bank_forks::{BankForks, SnapshotConfig},
     commitment::{BlockCommitmentArray, BlockCommitmentCache, CommitmentSlots},
     inline_spl_token_v2_0::{SPL_TOKEN_ACCOUNT_MINT_OFFSET, SPL_TOKEN_ACCOUNT_OWNER_OFFSET},
+    inline_velas_account::{id as velas_account_id, VELAS_ACCOUNT_OWNERS_OFFSET},
     snapshot_utils::get_highest_snapshot_archive_path,
 };
 use solana_sdk::{
@@ -1422,6 +1423,38 @@ impl JsonRpcRequestProcessor {
         Ok(new_response(&bank, accounts))
     }
 
+    pub fn get_velas_accounts_by_owner(
+        &self,
+        owner: &Pubkey,
+        config: Option<RpcAccountInfoConfig>,
+    ) -> Result<RpcResponse<Vec<RpcKeyedAccount>>> {
+        let config = config.unwrap_or_default();
+        let bank = self.bank(config.commitment);
+        let encoding = config.encoding.unwrap_or(UiAccountEncoding::Binary);
+        let data_slice_config = config.data_slice;
+        check_slice_and_encoding(&encoding, data_slice_config.is_some())?;
+
+        let keyed_accounts = self.get_filtered_spl_token_accounts_by_owner(&bank, owner, filters);
+        let accounts = if encoding == UiAccountEncoding::JsonParsed {
+            get_parsed_token_accounts(bank.clone(), keyed_accounts.into_iter()).collect()
+        } else {
+            keyed_accounts
+                .into_iter()
+                .map(|(pubkey, account)| RpcKeyedAccount {
+                    pubkey: pubkey.to_string(),
+                    account: UiAccount::encode(
+                        &pubkey,
+                        account,
+                        encoding.clone(),
+                        None,
+                        data_slice_config,
+                    ),
+                })
+                .collect()
+        };
+        Ok(new_response(&bank, accounts))
+    }
+
     /// Use a set of filters to get an iterator of keyed program accounts from a bank
     fn get_filtered_program_accounts(
         &self,
@@ -1529,6 +1562,49 @@ impl JsonRpcRequestProcessor {
             })
         } else {
             self.get_filtered_program_accounts(bank, &spl_token_id_v2_0(), filters)
+        }
+    }
+
+    /// Get an iterator of velas-accounts accounts by owner address
+    fn get_filtered_velas_accounts_by_owner(
+        &self,
+        bank: &Arc<Bank>,
+        owner_key: &Pubkey,
+        mut filters: Vec<RpcFilterType>,
+    ) -> Vec<(Pubkey, Account)> {
+        // The by-owner accounts index checks for Token Account state and Owner address on
+        // inclusion. However, due to the current AccountsDb implementation, an account may remain
+        // in storage as a zero-lamport Account::Default() after being wiped and reinitialized in
+        // later updates. We include the redundant filters here to avoid returning these accounts.
+        //
+        // Filter on Token Account state
+        filters.push(RpcFilterType::DataSize(
+            TokenAccount::get_packed_len() as u64
+        ));
+        // Filter on Owner address
+        filters.push(RpcFilterType::Memcmp(Memcmp {
+            offset: VELAS_ACCOUNT_OWNERS_OFFSET,
+            bytes: MemcmpEncodedBytes::Binary(owner_key.to_string()),
+            encoding: None,
+        }));
+
+        if self
+            .config
+            .account_indexes
+            .contains(&AccountIndex::VelasAccountOwner)
+        {
+            bank.get_filtered_indexed_accounts(
+                &IndexKey::VelasAccountOwner(*owner_key),
+                |account| {
+                    account.owner == velas_account_id()
+                        && filters.iter().all(|filter_type| match filter_type {
+                            RpcFilterType::DataSize(size) => account.data.len() as u64 == *size,
+                            RpcFilterType::Memcmp(compare) => compare.bytes_match(&account.data),
+                        })
+                },
+            )
+        } else {
+            self.get_filtered_program_accounts(bank, &velas_account_id(), filters)
         }
     }
 }

@@ -19,6 +19,7 @@ pub mod epoch_stakes;
 pub mod genesis_utils;
 pub mod hardened_unpack;
 pub mod inline_spl_token_v2_0;
+pub mod inline_velas_account;
 pub mod instruction_recorder;
 pub mod loader_utils;
 pub mod log_collector;

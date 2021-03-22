@@ -5054,6 +5054,7 @@ pub(crate) mod tests {
         status_cache::MAX_CACHE_ENTRIES,
     };
     use crossbeam_channel::bounded;
+    use evm_state::H256;
     use solana_sdk::{
         account_utils::StateMut,
         clock::{DEFAULT_SLOTS_PER_EPOCH, DEFAULT_TICKS_PER_SLOT},
@@ -10317,7 +10318,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_bank_hash_consistency() {
         solana_logger::setup();
 
@@ -10332,6 +10332,10 @@ pub(crate) mod tests {
         genesis_config.cluster_type = ClusterType::MainnetBeta;
         genesis_config.rent.burn_percent = 100;
         let mut bank = Arc::new(Bank::new(&genesis_config));
+        assert_eq!(
+            bank.evm_state.read().unwrap().root,
+            evm_state::empty_trie_hash()
+        );
         // Check a few slots, cross an epoch boundary
         assert_eq!(bank.get_slots_in_epoch(0), 32);
         loop {
@@ -10339,25 +10343,29 @@ pub(crate) mod tests {
             if bank.slot == 0 {
                 assert_eq!(
                     bank.hash().to_string(),
-                    "6oxxAqridoSSPQ1rnEh8qBhQpMmLUve3X4fsNNr2gExE"
+                    "Hm2ALLJgUkhHHRwWFGFNr1yAkBu2hg4tn6jLM6tX9KHe"
                 );
             }
             if bank.slot == 32 {
                 assert_eq!(
                     bank.hash().to_string(),
-                    "7AkMgAb2v4tuoiSf3NnVgaBxSvp7XidbrSwsPEn4ENTp"
+                    "5KmMteCvYrhydNb8chDLxFefpihNExVgAaGwpxra79i7"
                 );
             }
             if bank.slot == 64 {
                 assert_eq!(
                     bank.hash().to_string(),
-                    "2JzWWRBtQgdXboaACBRXNNKsHeBtn57uYmqH1AgGUkdG"
+                    "5qSPqCz2jGSTeuiJrvcvs5U64QrgadsBkTsaYuHHALig"
                 );
             }
             if bank.slot == 128 {
                 assert_eq!(
+                    bank.evm_state.read().unwrap().root,
+                    evm_state::empty_trie_hash()
+                );
+                assert_eq!(
                     bank.hash().to_string(),
-                    "FQnVhDVjhCyfBxFb3bdm3CLiuCePvWuW5TGDsLBZnKAo"
+                    "DKXirPZBYDYkUreoMEzRheKWGJQP2eEQgYTsNFJP795a"
                 );
                 break;
             }

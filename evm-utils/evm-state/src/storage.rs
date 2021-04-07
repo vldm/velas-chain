@@ -23,6 +23,7 @@ use crate::{
     transactions::{Transaction, TransactionReceipt},
     types::*,
 };
+use triedb::{rocksdb::RocksMemoryTrieMut, FixedSecureTrieMut};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -136,14 +137,24 @@ impl Storage {
 
         Ok(())
     }
+
+    pub fn typed_for<K: AsRef<[u8]>, V: Encodable + Decodable>(
+        &self,
+        root: H256,
+    ) -> FixedSecureTrieMut<RocksMemoryTrieMut<&DB>, K, V> {
+        FixedSecureTrieMut::new(RocksMemoryTrieMut::new(self.db.as_ref(), root))
+    }
 }
 
 #[derive(Debug)]
-// Hack to close rocksdb background threads.
+// Hack to close rocksdb background threads. And flush database.
 pub struct DBWithClose(DB);
 
 impl Drop for DBWithClose {
     fn drop(&mut self) {
+        if let Err(e) = self.0.flush() {
+            error!("Error during rocksdb flush: {:?}", e);
+        }
         self.0.cancel_all_background_work(true);
     }
 }

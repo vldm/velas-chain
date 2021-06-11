@@ -66,6 +66,8 @@ enum SubCommands {
         #[structopt(short = "a", long = "abi")]
         abi: Option<String>,
     },
+    /// DEBUG: Deserialize EVM Instruction.
+    DeserializeInstruction { data: String },
 
     /// DEBUG: Parse binary array as hex/utf8.
     ParseArray { array: String },
@@ -243,6 +245,20 @@ fn main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
             let mut file = File::create(tx_file).unwrap();
             Write::write_all(&mut file, &bincode::serialize(&tx_create).unwrap()).unwrap();
+        }
+        SubCommands::DeserializeInstruction { data } => {
+            let data = hex::decode(&data).unwrap();
+            let ix: solana_evm_loader_program::instructions::EvmInstruction =
+                bincode::deserialize(&data).unwrap();
+            println!("data = {:?}", ix);
+            match ix {
+                solana_evm_loader_program::instructions::EvmInstruction::EvmTransaction {
+                    evm_tx,
+                } => {
+                    println!("caller = {}", evm_tx.caller().unwrap());
+                }
+                _ => {}
+            }
         }
         SubCommands::CallDummy {
             tx_file,

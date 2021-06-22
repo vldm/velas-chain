@@ -81,6 +81,7 @@ pub enum RpcRequest {
     EthGetTransactionByHash,
     EthGetTransactionReceipt,
     EthCall,
+    EthTraceCall,
     EthEstimateGas,
     EthGetLogs,
 
@@ -164,6 +165,7 @@ impl fmt::Display for RpcRequest {
             RpcRequest::EthGetTransactionByHash => "eth_getTransactionByHash",
             RpcRequest::EthGetTransactionReceipt => "eth_getTransactionReceipt",
             RpcRequest::EthCall => "eth_call",
+            RpcRequest::EthTraceCall => "trace_call",
             RpcRequest::EthEstimateGas => "eth_estimateGas",
             RpcRequest::EthGetLogs => "eth_getLogs",
             RpcRequest::GetVelasAccountsByOperationalKey => "getVelasAccountsByOperationalKey",

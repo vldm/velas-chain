@@ -101,7 +101,7 @@ impl EvmProcessor {
 
         ic_msg!(
             invoke_context,
-            "EvmTransaction: Executed transaction result: {:?}",
+            "EvmTransaction: Executed transaction result: {}",
             result
         );
         if matches!(
@@ -192,7 +192,7 @@ impl EvmProcessor {
             })?;
         ic_msg!(
             invoke_context,
-            "EvmAuthorizedTransaction: Executed transaction result: {:?}",
+            "EvmAuthorizedTransaction: Executed transaction result: {}",
             result
         );
         if matches!(
@@ -391,7 +391,7 @@ impl EvmProcessor {
 
                 ic_msg!(
                     invoke_context,
-                    "BigTransaction::EvmTransactionExecute: Execute tx exit status = {:?}",
+                    "BigTransaction::EvmTransactionExecute: Executed transaction result: {}",
                     result
                 );
                 if matches!(

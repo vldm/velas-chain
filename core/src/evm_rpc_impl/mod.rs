@@ -123,71 +123,6 @@ impl ChainMockERPC for ChainMockErpcImpl {
         Err(Error::Unimplemented {})
     }
 
-    fn block_by_hash(
-        &self,
-        meta: Self::Metadata,
-        block_hash: Hex<H256>,
-        full: bool,
-    ) -> Result<Option<RPCBlock>, Error> {
-        debug!("Requested hash = {:?}", block_hash.0);
-        let block = match meta.get_evm_block_id_by_hash(block_hash.0) {
-            None => {
-                error!("Not found block for hash:{}", block_hash);
-                return Ok(None);
-            }
-            Some(b) => b,
-        };
-        debug!("Found block = {:?}", block);
-
-        self.block_by_number(meta, format!("{:#x}", block), full)
-    }
-
-    fn block_by_number(
-        &self,
-        meta: Self::Metadata,
-        block: String,
-        full: bool,
-    ) -> Result<Option<RPCBlock>, Error> {
-        let num = block_to_confirmed_num(Some(&block), &meta);
-        // TODO: Inline evm_state lookups, and request only solana headers.
-        let (block, confirmed) = match num.and_then(|block_num| meta.get_evm_block_by_id(block_num))
-        {
-            None => {
-                error!("Error requesting block:{} ({:?}) not found", block, num);
-                return Ok(None);
-            }
-            Some(b) => b,
-        };
-
-        let bank = meta.bank(None);
-        let chain_id = bank.evm_chain_id;
-
-        let block_hash = block.header.hash();
-        let transactions = if full {
-            let txs = block
-                .transactions
-                .into_iter()
-                .filter_map(|(hash, receipt)| {
-                    RPCTransaction::new_from_receipt(receipt, hash, block_hash, chain_id).ok()
-                })
-                .collect();
-            Either::Right(txs)
-        } else {
-            let txs = block
-                .transactions
-                .into_iter()
-                .map(|(k, _v)| Hex(k))
-                .collect();
-            Either::Left(txs)
-        };
-
-        Ok(Some(RPCBlock::new_from_head(
-            block.header,
-            confirmed,
-            transactions,
-        )))
-    }
-
     fn block_transaction_count_by_number(
         &self,
         _meta: Self::Metadata,
@@ -322,6 +257,71 @@ impl BasicERPC for BasicErpcImpl {
         Ok(Bytes(account.code.into()))
     }
 
+    fn block_by_hash(
+        &self,
+        meta: Self::Metadata,
+        block_hash: Hex<H256>,
+        full: bool,
+    ) -> Result<Option<RPCBlock>, Error> {
+        debug!("Requested hash = {:?}", block_hash.0);
+        let block = match meta.get_evm_block_id_by_hash(block_hash.0) {
+            None => {
+                error!("Not found block for hash:{}", block_hash);
+                return Ok(None);
+            }
+            Some(b) => b,
+        };
+        debug!("Found block = {:?}", block);
+
+        self.block_by_number(meta, format!("{:#x}", block), full)
+    }
+
+    fn block_by_number(
+        &self,
+        meta: Self::Metadata,
+        block: String,
+        full: bool,
+    ) -> Result<Option<RPCBlock>, Error> {
+        let num = block_to_confirmed_num(Some(&block), &meta);
+        // TODO: Inline evm_state lookups, and request only solana headers.
+        let (block, confirmed) = match num.and_then(|block_num| meta.get_evm_block_by_id(block_num))
+        {
+            None => {
+                error!("Error requesting block:{} ({:?}) not found", block, num);
+                return Ok(None);
+            }
+            Some(b) => b,
+        };
+
+        let bank = meta.bank(None);
+        let chain_id = bank.evm_chain_id;
+
+        let block_hash = block.header.hash();
+        let transactions = if full {
+            let txs = block
+                .transactions
+                .into_iter()
+                .filter_map(|(hash, receipt)| {
+                    RPCTransaction::new_from_receipt(receipt, hash, block_hash, chain_id).ok()
+                })
+                .collect();
+            Either::Right(txs)
+        } else {
+            let txs = block
+                .transactions
+                .into_iter()
+                .map(|(k, _v)| Hex(k))
+                .collect();
+            Either::Left(txs)
+        };
+
+        Ok(Some(RPCBlock::new_from_head(
+            block.header,
+            confirmed,
+            transactions,
+        )))
+    }
+
     fn transaction_by_hash(
         &self,
         meta: Self::Metadata,
@@ -381,8 +381,102 @@ impl BasicERPC for BasicErpcImpl {
             .flatten()
             .map(|s| solana_sdk::pubkey::Pubkey::from_str(&s))
             .collect();
-        let result = call(meta, tx, block, meta_keys.into_native_error(false)?)?;
+        let result = call(meta, tx, None, meta_keys.into_native_error(false)?)?;
         Ok(Bytes(result.1))
+    }
+
+    fn trace_call(
+        &self,
+        meta: Self::Metadata,
+        tx: RPCTransaction,
+        traces: Vec<String>, //TODO: check trace = ["trace"]
+        block: Option<String>,
+        meta_keys: Option<Vec<String>>,
+    ) -> Result<evm_rpc::trace::TraceResultsWithTransactionHash, Error> {
+        let meta_keys: Result<Vec<_>, _> = meta_keys
+            .into_iter()
+            .flatten()
+            .map(|s| solana_sdk::pubkey::Pubkey::from_str(&s))
+            .collect();
+
+        let num = block_to_confirmed_num(block.as_ref(), &meta);
+        let saved_root = if let Some(block_num) = num {
+            let block = meta
+                .get_evm_block_by_id(block_num.saturating_sub(1))
+                .ok_or(Error::StateNotFoundForBlock {
+                    block: block_num.to_string(),
+                })?;
+            Some(block.0.header.state_root)
+        } else {
+            None
+        };
+        let result = call(meta, tx, saved_root, meta_keys.into_native_error(false)?)?;
+        let result = evm_rpc::trace::TraceResultsWithTransactionHash {
+            trace: result.3.into_iter().map(From::from).collect(),
+            output: result.1.into(),
+            transaction_hash: None,
+        };
+        Ok(result)
+    }
+
+    fn trace_replayTransaction(
+        &self,
+        meta: Self::Metadata,
+        tx_hash: Hex<H256>,
+        traces: Vec<String>,
+        meta_keys: Option<Vec<String>>,
+    ) -> Result<Option<evm_rpc::trace::TraceResultsWithTransactionHash>, Error> {
+        let tx = self.transaction_by_hash(meta.clone(), tx_hash);
+        match tx {
+            Ok(Some(tx)) => {
+                let block = if let Some(block) = tx.block_number {
+                    block.to_string()
+                } else {
+                    return Ok(None);
+                };
+                let tx_hash = tx.hash;
+                let mut result = self.trace_call(meta, tx, traces, Some(block), meta_keys)?;
+                result.transaction_hash = tx_hash;
+                Ok(Some(result))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn trace_replayBlock(
+        &self,
+        meta: Self::Metadata,
+        block_num: String,
+        traces: Vec<String>,
+        meta_keys: Option<Vec<String>>,
+    ) -> Result<Vec<evm_rpc::trace::TraceResultsWithTransactionHash>, Error> {
+        let block =
+            if let Some(block) = self.block_by_number(meta.clone(), block_num.clone(), true)? {
+                block
+            } else {
+                return Err(Error::StateNotFoundForBlock { block: block_num });
+            };
+        let txs = match block.transactions {
+            Either::Right(txs) => txs,
+            _ => return Err(Error::Unimplemented {}),
+        };
+        txs.into_iter()
+            .map(|tx| {
+                let tx_hash = tx.hash;
+                self.trace_call(
+                    meta.clone(),
+                    tx,
+                    traces.clone(),
+                    Some(block_num.clone()),
+                    meta_keys.clone(),
+                )
+                .map(|mut result| {
+                    result.transaction_hash = tx_hash;
+                    result
+                })
+            })
+            .collect()
     }
 
     fn estimate_gas(
@@ -397,7 +491,7 @@ impl BasicERPC for BasicErpcImpl {
             .flatten()
             .map(|s| solana_sdk::pubkey::Pubkey::from_str(&s))
             .collect();
-        let result = call(meta, tx, block, meta_keys.into_native_error(false)?)?;
+        let result = call(meta, tx, None, meta_keys.into_native_error(false)?)?;
         Ok(Hex(result.2.into()))
     }
 
@@ -447,9 +541,17 @@ impl BasicERPC for BasicErpcImpl {
 fn call(
     meta: JsonRpcRequestProcessor,
     tx: RPCTransaction,
-    _block: Option<String>,
+    saved_root: Option<H256>,
     meta_keys: Vec<solana_sdk::pubkey::Pubkey>,
-) -> Result<(evm_state::ExitSucceed, Vec<u8>, u64), Error> {
+) -> Result<
+    (
+        evm_state::ExitSucceed,
+        Vec<u8>,
+        u64,
+        Vec<evm_state::executor::Trace>,
+    ),
+    Error,
+> {
     let caller = tx.from.map(|a| a.0).unwrap_or_default();
 
     let value = tx.value.map(|a| a.0).unwrap_or_else(|| 0.into());
@@ -473,6 +575,14 @@ fn call(
         evm_state::EvmState::Incomming(i) => i,
         evm_state::EvmState::Committed(_) => unreachable!(),
     };
+    let evm_state = if let Some(root) = saved_root {
+        evm_state
+            .new_incomming_for_root(root)
+            .ok_or(Error::StateRootNotFound { state: root })?
+    } else {
+        evm_state
+    };
+
     let estimate_config = evm_state::EvmConfig {
         estimate: true,
         ..Default::default()
@@ -532,7 +642,11 @@ fn call(
                 evm_state_balance,
                 &user_accounts,
             ),
-            |e| e.transact_call(caller, address, value, input, gas_limit),
+            |e| {
+                let result = e.transact_call(caller, address, value, input, gas_limit);
+                let traces = e.take_traces();
+                (result.0, result.1, traces)
+            },
         )
     } else {
         executor.with_executor(
@@ -541,9 +655,14 @@ fn call(
                 evm_state_balance,
                 &[],
             ),
-            |e| (e.transact_create(caller, value, input, gas_limit), vec![]),
+            |e| {
+                let result = e.transact_create(caller, value, input, gas_limit);
+                let traces = e.take_traces();
+                (result, vec![], traces)
+            },
         )
     };
+    let traces = result.2;
 
     let gas_used = executor.deconstruct().state.used_gas;
 
@@ -560,5 +679,5 @@ fn call(
         evm_state::ExitReason::Succeed(s) => Ok((s, result.1)),
     }?;
 
-    Ok((result.0, result.1, gas_used))
+    Ok((result.0, result.1, gas_used, traces))
 }

@@ -1,10 +1,12 @@
 use evm::executor::{MemoryStackState, StackSubstateMetadata};
 pub use evm::{
     backend::{Apply, ApplyBackend, Backend, Log, MemoryAccount, MemoryVicinity},
+    executor::traces::*,
     executor::StackExecutor,
     Config, Context, Handler, Transfer,
     {ExitError, ExitFatal, ExitReason, ExitRevert, ExitSucceed},
 };
+use std::fmt;
 
 use log::*;
 pub use primitive_types::{H256, U256};
@@ -39,6 +41,38 @@ pub struct ExecutionResult {
     pub exit_data: Vec<u8>,
     pub used_gas: u64,
     pub tx_logs: Vec<Log>,
+    pub traces: Vec<Trace>,
+}
+
+impl fmt::Display for ExecutionResult {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "Execution result:")?;
+        writeln!(f, "  Used gas: {}", self.used_gas)?;
+        writeln!(f, "  Output: {}", hex::encode(&self.exit_data))?;
+        writeln!(f, "  Status: {:?}", self.exit_reason)?;
+        if !self.tx_logs.is_empty() {
+            writeln!(f, "  Logs:")?;
+            for l in &self.tx_logs {
+                writeln!(f, "    Address:{:?}", l.address)?;
+                writeln!(f, "    Data:{:?}", l.data)?;
+                writeln!(f, "    Topics:")?;
+                for topic in &l.topics {
+                    writeln!(f, "      {:?}", topic)?;
+                }
+                writeln!(f, "")?;
+            }
+        }
+        if !self.traces.is_empty() {
+            writeln!(f, "  Traces:")?;
+            for trace in &self.traces {
+                writeln!(f, "    Action:{:?}", trace.action)?;
+                writeln!(f, "    Result:{:?}", trace.result)?;
+                writeln!(f, "    Subtraces:{}", trace.subtraces)?;
+                writeln!(f, "    TraceAddress:{:?}", trace.trace_address)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -171,6 +205,7 @@ impl Executor {
                 )
             }
         };
+        let traces = executor.take_traces();
         let used_gas = executor.used_gas();
         let fee = executor.fee(gas_price);
         let mut executor_state = executor.into_state();
@@ -203,6 +238,7 @@ impl Executor {
             exit_data,
             used_gas,
             tx_logs,
+            traces,
         })
     }
 
@@ -970,18 +1006,23 @@ mod tests {
             (ExitReason::Succeed(ExitSucceed::Returned), _)
         ));
 
-        let exit_reason = executor.with_executor(noop_precompile, |e| {
-            e.transact_call(
+        let exit_result = executor
+            .transaction_execute_unsinged(
                 name_to_key("caller"),
-                name_to_key("contract"),
-                U256::zero(),
-                data.to_vec(),
-                300000,
+                UnsignedTransaction {
+                    nonce: 1.into(),
+                    gas_price: 0.into(),
+                    gas_limit: 300000.into(),
+                    action: TransactionAction::Call(name_to_key("contract")),
+                    value: U256::zero(),
+                    input: data.to_vec(),
+                },
+                noop_precompile,
             )
-        });
+            .unwrap();
 
         let result = hex::decode(HELLO_WORLD_RESULT).unwrap();
-        match exit_reason {
+        match (exit_result.exit_reason, exit_result.exit_data) {
             (ExitReason::Succeed(ExitSucceed::Returned), res) if res == result => {}
             any_other => panic!("Not expected result={:?}", any_other),
         }

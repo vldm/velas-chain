@@ -598,35 +598,6 @@ impl ChainMockERPC for ChainMockErpcProxy {
         Ok(String::from("0x00"))
     }
 
-    fn block_by_hash(
-        &self,
-        meta: Self::Metadata,
-        block_hash: Hex<H256>,
-        full: bool,
-    ) -> EvmResult<Option<RPCBlock>> {
-        if block_hash == Hex(H256::zero()) {
-            Ok(Some(RPCBlock::default()))
-        }
-        else {
-        proxy_evm_rpc!(meta.rpc_client, EthGetBlockByHash, block_hash, full)
-            .map(|o: Option<_>| o.map(compatibility::patch_block))
-        }
-    }
-
-    fn block_by_number(
-        &self,
-        meta: Self::Metadata,
-        block: String,
-        full: bool,
-    ) -> EvmResult<Option<RPCBlock>> {
-        if block == "0x0" {
-            Ok(Some(RPCBlock::default()))
-        } else {
-            proxy_evm_rpc!(meta.rpc_client, EthGetBlockByNumber, block, full)
-                .map(|o: Option<_>| o.map(compatibility::patch_block))
-        }
-    }
-
     fn block_transaction_count_by_number(
         &self,
         _meta: Self::Metadata,
@@ -742,6 +713,34 @@ impl BasicERPC for BasicErpcProxy {
         proxy_evm_rpc!(meta.rpc_client, EthGetCode, address, block)
     }
 
+    fn block_by_hash(
+        &self,
+        meta: Self::Metadata,
+        block_hash: Hex<H256>,
+        full: bool,
+    ) -> EvmResult<Option<RPCBlock>> {
+        if block_hash == Hex(H256::zero()) {
+            Ok(Some(RPCBlock::default()))
+        } else {
+            proxy_evm_rpc!(meta.rpc_client, EthGetBlockByHash, block_hash, full)
+                .map(|o: Option<_>| o.map(compatibility::patch_block))
+        }
+    }
+
+    fn block_by_number(
+        &self,
+        meta: Self::Metadata,
+        block: String,
+        full: bool,
+    ) -> EvmResult<Option<RPCBlock>> {
+        if block == "0x0" {
+            Ok(Some(RPCBlock::default()))
+        } else {
+            proxy_evm_rpc!(meta.rpc_client, EthGetBlockByNumber, block, full)
+                .map(|o: Option<_>| o.map(compatibility::patch_block))
+        }
+    }
+
     fn transaction_by_hash(
         &self,
         meta: Self::Metadata,
@@ -766,6 +765,37 @@ impl BasicERPC for BasicErpcProxy {
         meta_keys: Option<Vec<String>>,
     ) -> EvmResult<Bytes> {
         proxy_evm_rpc!(meta.rpc_client, EthCall, tx, block, meta_keys)
+    }
+
+    fn trace_call(
+        &self,
+        meta: Self::Metadata,
+        tx: RPCTransaction,
+        traces: Vec<String>,
+        block: Option<String>,
+        meta_keys: Option<Vec<String>>,
+    ) -> EvmResult<evm_rpc::trace::TraceResultsWithTransactionHash> {
+        proxy_evm_rpc!(meta.rpc_client, EthTraceCall, tx, traces, block, meta_keys)
+    }
+
+    fn trace_replayTransaction(
+        &self,
+        meta: Self::Metadata,
+        tx_hash: Hex<H256>,
+        traces: Vec<String>,
+        meta_keys: Option<Vec<String>>,
+    ) -> EvmResult<Option<trace::TraceResultsWithTransactionHash>> {
+        Err(Error::Unimplemented {})
+    }
+
+    fn trace_replayBlock(
+        &self,
+        meta: Self::Metadata,
+        block: String,
+        traces: Vec<String>,
+        meta_keys: Option<Vec<String>>,
+    ) -> EvmResult<Vec<trace::TraceResultsWithTransactionHash>> {
+        Err(Error::Unimplemented {})
     }
 
     fn estimate_gas(
@@ -1313,10 +1343,13 @@ impl RpcSol for RpcSolProxy {
         meta: Self::Metadata,
         pubkey_str: String,
     ) -> Result<RpcResponse<Vec<String>>> {
-        proxy_sol_rpc!(meta.rpc_client, GetVelasRelyingPartiesByOwnerKey, pubkey_str)
+        proxy_sol_rpc!(
+            meta.rpc_client,
+            GetVelasRelyingPartiesByOwnerKey,
+            pubkey_str
+        )
     }
 
-    
     fn get_recent_performance_samples(
         &self,
         meta: Self::Metadata,

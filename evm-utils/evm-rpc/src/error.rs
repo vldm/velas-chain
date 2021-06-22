@@ -1,6 +1,6 @@
 use std::num::ParseIntError;
 
-use evm_state::{ExitError, ExitFatal, ExitRevert};
+use evm_state::{ExitError, ExitFatal, ExitRevert, H256};
 use jsonrpc_core::Error as JRpcError;
 use rlp::DecoderError;
 use rustc_hex::FromHexError;
@@ -48,6 +48,9 @@ pub enum Error {
 
     #[snafu(display("Failed to find state for block {}", block))]
     StateNotFoundForBlock { block: String },
+
+    #[snafu(display("Failed to find state root {}", state))]
+    StateRootNotFound { state: H256 },
 
     #[snafu(display("Failed to process native chain request: {}", source))]
     ProxyRpcError { source: JRpcError },
@@ -185,6 +188,7 @@ impl From<Error> for JRpcError {
             }
             Error::BlockNotFound { .. } => internal_error(BLOCK_NOT_FOUND_RPC_ERROR, &err),
             Error::StateNotFoundForBlock { .. } => internal_error(STATE_NOT_FOUND_RPC_ERROR, &err),
+            Error::StateRootNotFound { .. } => internal_error(STATE_NOT_FOUND_RPC_ERROR, &err),
             Error::KeyNotFound { .. } => internal_error(KEY_NOT_FOUND_RPC_ERROR, &err),
             Error::Unimplemented {} => {
                 let mut error = Self::invalid_request();
